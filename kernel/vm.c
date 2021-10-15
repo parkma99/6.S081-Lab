@@ -47,6 +47,50 @@ kvminit()
   kvmmap(TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
 }
 
+/*
+ * init kernel pagetable for every process
+*/
+pagetable_t
+uvmkpt_init()
+{
+  pagetable_t pt = uvmcreate();
+  if(pt==0)
+  {
+    panic("uvmkpt_init");
+    return 0;
+  }
+  // uart registers
+  uvmmap(pt, UART0, UART0, PGSIZE, PTE_R | PTE_W);
+
+  // virtio mmio disk interface
+  uvmmap(pt, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
+
+  // CLINT
+  uvmmap(pt, CLINT, CLINT, 0x10000, PTE_R | PTE_W);
+
+  // PLIC
+  uvmmap(pt, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
+
+  // map kernel text executable and read-only.
+  uvmmap(pt, KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
+
+  // map kernel data and the physical RAM we'll make use of.
+  uvmmap(pt, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
+
+  // map the trampoline for trap entry/exit to
+  // the highest virtual address in the kernel.
+  uvmmap(pt, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+  return pt;
+}
+
+// add a mapping to the process kernel page table.
+void
+uvmmap(pagetable_t pt,uint64 va, uint64 pa, uint64 sz, int perm)
+{
+  if(mappages(pt, va, sz, pa, perm) != 0)
+    panic("kvmmap");
+}
+
 // Switch h/w page table register to the kernel's page table,
 // and enable paging.
 void
@@ -132,7 +176,7 @@ kvmpa(uint64 va)
   pte_t *pte;
   uint64 pa;
   
-  pte = walk(kernel_pagetable, va, 0);
+  pte = walk(getkernelpagetable(), va, 0);
   if(pte == 0)
     panic("kvmpa");
   if((*pte & PTE_V) == 0)
@@ -284,6 +328,25 @@ freewalk(pagetable_t pagetable)
       pagetable[i] = 0;
     } else if(pte & PTE_V){
       panic("freewalk: leaf");
+    }
+  }
+  kfree((void*)pagetable);
+}
+
+void
+proc_freekernelpagetable(pagetable_t pagetable)
+{
+  for(int i = 0; i < 512; i++) {
+    pte_t pte = pagetable[i];
+    if(pte & PTE_V){
+      if(pte & (PTE_R|PTE_W|PTE_X)) {
+        // leaf pte
+        pagetable[i] = 0;
+      } else {
+        // high level pte
+        pagetable[i] = 0;
+        proc_freekernelpagetable((pagetable_t)PTE2PA(pte));
+      }
     }
   }
   kfree((void*)pagetable);
