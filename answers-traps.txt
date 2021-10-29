@@ -1,0 +1,13 @@
+1. a0-a7 contain arguments to functions;a2 stores 13.
+2. The compiler inlines functions from the code `li	a1,12`
+3. 0x0000000000000628
+4. 0x38
+5. 0x00646c72 在小端序下存储为
+内存低地址---> 0x72---r
+              0x6c---l
+              0x64---d
+              0x00---NULL
+
+输出 HE110 World
+大端序下i = 0x726c6400
+6. 原本需要两个参数，却只传入了一个，因此y=后面打印的结果取决于之前a2中保存的数据
