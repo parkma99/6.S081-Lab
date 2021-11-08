@@ -17,6 +17,10 @@ extern char end[]; // first address after kernel.
 struct run {
   struct run *next;
 };
+struct {
+  struct spinlock lock;
+  int pageref[PHYSTOP/PGSIZE]; 
+}PGref;
 
 struct {
   struct spinlock lock;
@@ -27,6 +31,7 @@ void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
+  initlock(&PGref.lock,"PGref");
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -52,14 +57,19 @@ kfree(void *pa)
     panic("kfree");
 
   // Fill with junk to catch dangling refs.
-  memset(pa, 1, PGSIZE);
-
-  r = (struct run*)pa;
-
-  acquire(&kmem.lock);
-  r->next = kmem.freelist;
-  kmem.freelist = r;
-  release(&kmem.lock);
+  acquire(&PGref.lock);
+  if(--PGref.pageref[(uint64)pa/PGSIZE] <= 0) {
+    memset(pa, 1, PGSIZE);
+    r = (struct run*)pa;
+    acquire(&kmem.lock);
+    r->next = kmem.freelist;
+    kmem.freelist = r;
+    release(&kmem.lock);
+  }
+  if(PGref.pageref[(uint64)pa/PGSIZE] <0){
+    PGref.pageref[(uint64)pa/PGSIZE]=0;
+  }
+  release(&PGref.lock);
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -76,7 +86,40 @@ kalloc(void)
     kmem.freelist = r->next;
   release(&kmem.lock);
 
-  if(r)
+  if(r){
     memset((char*)r, 5, PGSIZE); // fill with junk
+    PGref.pageref[(uint64)r/PGSIZE] = 1;
+  }
   return (void*)r;
 }
+
+void krefpage(void *pa) {
+  acquire(&PGref.lock);
+  PGref.pageref[(uint64)pa/PGSIZE] ++;
+  release(&PGref.lock);
+}
+
+void *kcopyfromref(void *pa) {
+  acquire(&PGref.lock);
+
+  if(PGref.pageref[(uint64)pa/PGSIZE] <= 1) { // 只有 1 个引用，无需复制
+    release(&PGref.lock);
+    return pa;
+  }
+
+  // 分配新的内存页，并复制旧页中的数据到新页
+  uint64 newpa = (uint64)kalloc();
+  if(newpa == 0) {
+    release(&PGref.lock);
+    return 0; // out of memory
+  }
+  memmove((void*)newpa, (void*)pa, PGSIZE);
+
+  // 旧页的引用减 1
+  PGref.pageref[(uint64)pa/PGSIZE] --;
+
+  release(&PGref.lock);
+  return (void*)newpa;
+}
+
+
