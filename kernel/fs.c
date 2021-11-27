@@ -717,3 +717,25 @@ nameiparent(char *path, char *name)
 {
   return namex(path, 1, name);
 }
+
+struct inode*
+symlinki(char *path)
+{
+  struct inode *ip;
+  for(int i=0;i<10;i++){
+    if((ip = namei(path)) == 0){
+      return 0;
+    }
+    ilock(ip);
+    if(ip->type != T_SYMLINK){
+      iunlock(ip);
+      return ip;
+    }
+    if(readi(ip,0,(uint64)path,0,ip->size) == 0){
+      iunlockput(ip);
+      return 0;
+    }
+    iunlockput(ip);
+  }
+  return 0;
+}
